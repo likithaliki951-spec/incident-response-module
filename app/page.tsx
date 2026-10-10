@@ -11,10 +11,9 @@ export const dynamic = "force-dynamic"
 
 export default async function DashboardPage() {
   const supabase = await createClient()
-  const { data, error } = await supabase
-    .from("incidents")
-    .select("*")
-    .order("created_at", { ascending: false })
+  const { data, error } = supabase
+    ? await supabase.from("incidents").select("*").order("created_at", { ascending: false })
+    : { data: null, error: null }
 
   const incidents = (data ?? []) as Incident[]
 

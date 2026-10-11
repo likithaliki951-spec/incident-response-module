@@ -1,10 +1,20 @@
 import type React from "react"
 import type { Metadata } from "next"
-import { GeistSans } from "geist/font/sans"
+import { Geist, Geist_Mono } from "next/font/google"
 import { Analytics } from "@vercel/analytics/next"
 import { Sidebar } from "@/components/sidebar"
 import { Suspense } from "react"
 import "./globals.css"
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+})
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+})
 
 export const metadata: Metadata = {
   title: "IRM · Incident Response Module",
@@ -19,7 +29,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" className={`dark ${GeistSans.variable} `}>
+    <html lang="en" className={`dark ${geistSans.variable} ${geistMono.variable}`}>
       <body className="font-sans antialiased">
         <div className="flex min-h-screen bg-background">
           <Sidebar />

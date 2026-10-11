@@ -1,0 +1,4 @@
+incident_id,incident_name,description,likelihood,impact,status,source
+INC-SAMPLE-01,Suspicious Kerberos Ticket Request,Anomalous encryption downgrade detected in Kerberos TGS request,0.85,80,Open,Active Directory SIEM
+INC-SAMPLE-02,Unauthorized Registry Run Key Persistence,Run key added under HKCU\Software\Microsoft\Windows\CurrentVersion\Run,0.70,60,Investigating,EDR Agent WS-12
+INC-SAMPLE-03,Benign Firewall Port Probe,External scanner probed closed port 8080. Dropped at perimeter.,0.20,15,Resolved,Perimeter Firewall

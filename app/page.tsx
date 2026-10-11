@@ -1,28 +1,39 @@
 import Link from "next/link"
-import { createClient } from "@/lib/supabase/server"
+import { fetchIncidents } from "@/lib/data-service"
 import { PageHeader } from "@/components/page-header"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { SeverityBadge, StatusBadge, RiskMeter } from "@/components/badges"
 import { RiskDistributionChart, ResponseTimelineChart } from "@/components/dashboard-charts"
+import { AddIncidentForm } from "@/components/add-incident-form"
 import { SEVERITY_ORDER, timeAgo, type Incident, type Severity } from "@/lib/irm"
-import { ShieldAlert, Flame, AlertOctagon, CheckCircle2, Activity, ArrowRight, Cpu, Boxes, MonitorDot } from "lucide-react"
+import {
+  ShieldAlert,
+  Flame,
+  AlertOctagon,
+  CheckCircle2,
+  Activity,
+  ArrowRight,
+  Cpu,
+  Boxes,
+  MonitorDot,
+  Clock,
+  Database,
+  Bug,
+  FileBarChart,
+  FileCode2,
+} from "lucide-react"
 
 export const dynamic = "force-dynamic"
 
 export default async function DashboardPage() {
-  const supabase = await createClient()
-  const { data, error } = await supabase
-    .from("incidents")
-    .select("*")
-    .order("created_at", { ascending: false })
-
-  const incidents = (data ?? []) as Incident[]
+  const { data: incidents, isSupabase, error } = await fetchIncidents()
 
   const total = incidents.length
+  const openIncidents = incidents.filter((i) => i.status !== "Resolved")
+  const openCount = openIncidents.length
   const highRisk = incidents.filter((i) => i.risk_score >= 50).length
   const critical = incidents.filter((i) => i.severity === "Critical").length
   const resolved = incidents.filter((i) => i.status === "Resolved").length
-  const openIncidents = incidents.filter((i) => i.status !== "Resolved")
   const overallRisk =
     openIncidents.length > 0
       ? Math.round(openIncidents.reduce((sum, i) => sum + i.risk_score, 0) / openIncidents.length)
@@ -46,11 +57,13 @@ export default async function DashboardPage() {
 
   const recent = incidents.slice(0, 6)
 
+  // 5 counts required by prompt: Total, Open, High-Risk, Critical, Resolved
   const stats = [
-    { label: "Total Incidents", value: total, icon: ShieldAlert, tone: "text-sky-400" },
-    { label: "High-Risk", value: highRisk, icon: Flame, tone: "text-orange-400" },
-    { label: "Critical", value: critical, icon: AlertOctagon, tone: "text-red-400" },
-    { label: "Resolved", value: resolved, icon: CheckCircle2, tone: "text-emerald-400" },
+    { label: "Total Incidents", value: total, icon: ShieldAlert, tone: "text-sky-400", desc: "All recorded cases" },
+    { label: "Open / Active", value: openCount, icon: Clock, tone: "text-violet-400", desc: "Awaiting resolution" },
+    { label: "High-Risk", value: highRisk, icon: Flame, tone: "text-orange-400", desc: "Risk score ≥ 50" },
+    { label: "Critical", value: critical, icon: AlertOctagon, tone: "text-red-400", desc: "Risk score ≥ 80" },
+    { label: "Resolved", value: resolved, icon: CheckCircle2, tone: "text-emerald-400", desc: "Successfully closed" },
   ]
 
   const riskSeverity: Severity =
@@ -60,33 +73,76 @@ export default async function DashboardPage() {
     <div className="mx-auto max-w-7xl space-y-6 px-4 py-6 pt-20 lg:px-8 lg:pt-8">
       <PageHeader
         title="Security Operations Dashboard"
-        description="Real-time incident posture processed by the Incident Response Module."
-      />
+        description="Real-time incident posture processed by the Arithmetic Unit (AU) and Incident Response Module (IRM)."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/malware"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors"
+          >
+            <Bug className="h-3.5 w-3.5 text-primary" />
+            Malware Analysis
+          </Link>
+          <Link
+            href="/reports"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors"
+          >
+            <FileBarChart className="h-3.5 w-3.5 text-chart-3" />
+            Generate Report
+          </Link>
+          <AddIncidentForm />
+        </div>
+      </PageHeader>
 
-      {/* AU -> IRM -> GU pipeline banner */}
-      <PipelineBanner overallRisk={overallRisk} />
+      {/* Database connection banner */}
+      <div className="flex items-center justify-between rounded-lg border border-border bg-card/60 px-4 py-2 text-xs">
+        <div className="flex items-center gap-2">
+          <Database className="h-4 w-4 text-primary" />
+          <span className="font-medium text-foreground">Data Layer:</span>
+          {isSupabase ? (
+            <span className="inline-flex items-center gap-1 text-emerald-400">
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+              Connected to Supabase live database
+            </span>
+          ) : (
+            <span className="text-muted-foreground">
+              Local Prototype Mode (In-memory storage). Connect Supabase in{" "}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">.env.local</code> for cloud persistence.
+            </span>
+          )}
+        </div>
+        <span className="text-[11px] text-muted-foreground hidden sm:inline">
+          {incidents.length} incident records loaded
+        </span>
+      </div>
 
       {error && (
         <Card className="border-red-500/30 bg-red-500/5">
           <CardContent className="p-4 text-sm text-red-400">
-            Failed to load incidents from Supabase: {error.message}
+            Database notice: {error} (Falling back to local prototype storage)
           </CardContent>
         </Card>
       )}
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      {/* AU -> IRM -> GU pipeline visualization */}
+      <PipelineBanner overallRisk={overallRisk} openCount={openCount} />
+
+      {/* 5 Stat cards: Total, Open, High-Risk, Critical, Resolved */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         {stats.map((s) => {
           const Icon = s.icon
           return (
-            <Card key={s.label}>
-              <CardContent className="flex items-center justify-between p-5">
-                <div className="space-y-1">
-                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{s.label}</p>
-                  <p className="font-mono text-3xl font-semibold tabular-nums">{s.value}</p>
+            <Card key={s.label} className="overflow-hidden">
+              <CardContent className="p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{s.label}</p>
+                  <div className="rounded-md bg-muted/60 p-1.5">
+                    <Icon className={`h-4 w-4 ${s.tone}`} />
+                  </div>
                 </div>
-                <div className="rounded-lg bg-muted/60 p-2.5">
-                  <Icon className={`h-5 w-5 ${s.tone}`} />
+                <div>
+                  <p className="font-mono text-3xl font-semibold tabular-nums text-foreground">{s.value}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">{s.desc}</p>
                 </div>
               </CardContent>
             </Card>
@@ -96,9 +152,11 @@ export default async function DashboardPage() {
 
       {/* Overall risk + charts */}
       <div className="grid gap-4 lg:grid-cols-3">
+        {/* Mean Risk Gauge */}
         <Card>
           <CardHeader>
-            <CardTitle>Overall Risk Score</CardTitle>
+            <CardTitle>Mean Risk Score</CardTitle>
+            <CardDescription>Arithmetic Unit average across active incidents</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col items-center justify-center gap-3 py-4">
             <div className="relative flex h-36 w-36 items-center justify-center">
@@ -121,13 +179,18 @@ export default async function DashboardPage() {
               </div>
             </div>
             <SeverityBadge severity={riskSeverity} />
-            <p className="text-center text-xs text-muted-foreground">Mean risk across {openIncidents.length} active incidents</p>
+            <div className="text-center text-xs text-muted-foreground space-y-0.5">
+              <p>Formula: <span className="font-mono text-foreground font-medium">Risk = Likelihood × Impact</span></p>
+              <p>{openIncidents.length} active incidents evaluated</p>
+            </div>
           </CardContent>
         </Card>
 
+        {/* Severity Distribution */}
         <Card>
           <CardHeader>
-            <CardTitle>Risk Distribution</CardTitle>
+            <CardTitle>Severity Distribution</CardTitle>
+            <CardDescription>Breakdown by IRM severity classification</CardDescription>
           </CardHeader>
           <CardContent>
             <RiskDistributionChart data={distribution} />
@@ -142,13 +205,15 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
 
+        {/* Response Timeline */}
         <Card>
           <CardHeader>
             <CardTitle>Response Timeline</CardTitle>
+            <CardDescription>Incidents ingested over the last 7 days</CardDescription>
           </CardHeader>
           <CardContent>
             <ResponseTimelineChart data={timeline} />
-            <p className="mt-2 text-center text-xs text-muted-foreground">Incidents ingested over the last 7 days</p>
+            <p className="mt-2 text-center text-xs text-muted-foreground">Synchronized by IRM ingestion pipeline</p>
           </CardContent>
         </Card>
       </div>
@@ -156,9 +221,15 @@ export default async function DashboardPage() {
       {/* Recent incidents */}
       <Card>
         <CardHeader className="flex-row items-center justify-between">
-          <CardTitle>Recent Incidents</CardTitle>
-          <Link href="/incidents" className="flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-            View all <ArrowRight className="h-3 w-3" />
+          <div>
+            <CardTitle>Recent Incidents</CardTitle>
+            <CardDescription>Latest events triaged through the AU → IRM → GU pipeline</CardDescription>
+          </div>
+          <Link
+            href="/incidents"
+            className="flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+          >
+            Manage all ({total}) <ArrowRight className="h-3 w-3" />
           </Link>
         </CardHeader>
         <CardContent>
@@ -175,22 +246,36 @@ export default async function DashboardPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
-                    <th className="pb-2 pr-4 font-medium">ID</th>
-                    <th className="pb-2 pr-4 font-medium">Incident</th>
-                    <th className="pb-2 pr-4 font-medium">Severity</th>
-                    <th className="pb-2 pr-4 font-medium">Risk</th>
-                    <th className="pb-2 pr-4 font-medium">Status</th>
-                    <th className="pb-2 font-medium">When</th>
+                    <th className="pb-3 pr-4 font-medium">Incident ID</th>
+                    <th className="pb-3 pr-4 font-medium">Name</th>
+                    <th className="pb-3 pr-4 font-medium">Severity</th>
+                    <th className="pb-3 pr-4 font-medium">AU Risk Score</th>
+                    <th className="pb-3 pr-4 font-medium">Status</th>
+                    <th className="pb-3 font-medium">Logged</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-border/50">
                   {recent.map((i) => (
-                    <tr key={i.id} className="border-b border-border/50 last:border-0">
-                      <td className="py-3 pr-4 font-mono text-xs text-muted-foreground">{i.incident_id}</td>
-                      <td className="py-3 pr-4 font-medium">{i.incident_name}</td>
-                      <td className="py-3 pr-4"><SeverityBadge severity={i.severity} /></td>
-                      <td className="py-3 pr-4"><RiskMeter score={i.risk_score} /></td>
-                      <td className="py-3 pr-4"><StatusBadge status={i.status} /></td>
+                    <tr key={i.id} className="transition-colors hover:bg-muted/30">
+                      <td className="py-3 pr-4 font-mono text-xs text-muted-foreground">
+                        <Link href="/incidents" className="hover:text-primary hover:underline">
+                          {i.incident_id}
+                        </Link>
+                      </td>
+                      <td className="py-3 pr-4 font-medium text-foreground">
+                        <Link href="/incidents" className="hover:underline">
+                          {i.incident_name}
+                        </Link>
+                      </td>
+                      <td className="py-3 pr-4">
+                        <SeverityBadge severity={i.severity} />
+                      </td>
+                      <td className="py-3 pr-4">
+                        <RiskMeter score={i.risk_score} />
+                      </td>
+                      <td className="py-3 pr-4">
+                        <StatusBadge status={i.status} />
+                      </td>
                       <td className="py-3 text-xs text-muted-foreground">{timeAgo(i.created_at)}</td>
                     </tr>
                   ))}
@@ -217,13 +302,14 @@ function severityHex(severity: Severity): string {
   }
 }
 
-function PipelineBanner({ overallRisk }: { overallRisk: number }) {
+function PipelineBanner({ overallRisk, openCount }: { overallRisk: number; openCount: number }) {
   const steps = [
     {
       icon: Cpu,
       key: "AU",
       title: "Arithmetic Unit",
-      desc: "Risk = Likelihood × Impact",
+      desc: "Computes Risk = Likelihood × Impact (0–100)",
+      detail: `Current Mean Score: ${overallRisk}/100`,
       tone: "text-chart-2",
       ring: "ring-chart-2/30 bg-chart-2/10",
     },
@@ -231,7 +317,8 @@ function PipelineBanner({ overallRisk }: { overallRisk: number }) {
       icon: Boxes,
       key: "IRM",
       title: "Incident Response Module",
-      desc: "Applies response rules & syncs",
+      desc: "Applies response policies & syncs DB",
+      detail: `${openCount} active cases in queue`,
       tone: "text-primary",
       ring: "ring-primary/30 bg-primary/10",
     },
@@ -239,27 +326,40 @@ function PipelineBanner({ overallRisk }: { overallRisk: number }) {
       icon: MonitorDot,
       key: "GU",
       title: "Graphical Unit",
-      desc: "This dashboard",
+      desc: "Renders SOC dashboard & reports",
+      detail: "Live telemetry operational",
       tone: "text-chart-3",
       ring: "ring-chart-3/30 bg-chart-3/10",
     },
   ]
   return (
-    <Card className="overflow-hidden">
-      <CardContent className="flex flex-col items-stretch gap-3 p-4 md:flex-row md:items-center">
+    <Card className="overflow-hidden border-primary/20 bg-card/80">
+      <CardHeader className="pb-3 pt-4">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <span className="font-mono text-primary">AU → IRM → GU</span>
+            <span>Architecture Data Pipeline</span>
+          </CardTitle>
+          <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400 border border-emerald-500/20">
+            Pipeline Synchronized
+          </span>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col items-stretch gap-3 p-4 pt-0 md:flex-row md:items-center">
         {steps.map((step, idx) => {
           const Icon = step.icon
           return (
-            <div key={step.key} className="flex flex-1 items-center gap-3">
-              <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg ring-1 ${step.ring}`}>
+            <div key={step.key} className="flex flex-1 items-center gap-3 rounded-lg border border-border/50 bg-muted/20 p-3">
+              <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ring-1 ${step.ring}`}>
                 <Icon className={`h-5 w-5 ${step.tone}`} />
               </div>
-              <div className="min-w-0">
-                <p className="flex items-center gap-2 text-sm font-semibold">
+              <div className="min-w-0 flex-1">
+                <p className="flex items-center gap-1.5 text-xs font-semibold">
                   <span className={`font-mono ${step.tone}`}>{step.key}</span>
-                  <span className="truncate text-muted-foreground">{step.title}</span>
+                  <span className="truncate text-foreground">{step.title}</span>
                 </p>
-                <p className="truncate text-xs text-muted-foreground">{step.desc}</p>
+                <p className="truncate text-[11px] text-muted-foreground">{step.desc}</p>
+                <p className="font-mono text-[10px] text-muted-foreground/80 mt-0.5">{step.detail}</p>
               </div>
               {idx < steps.length - 1 && (
                 <ArrowRight className="ml-auto hidden h-4 w-4 shrink-0 text-muted-foreground md:block" />

@@ -1,20 +1,22 @@
-import { createClient } from "@/lib/supabase/server"
+import { fetchIncidents, fetchReports } from "@/lib/data-service"
 import { PageHeader } from "@/components/page-header"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { SeverityBarChart, TrendLineChart } from "@/components/report-charts"
+import { ReportGenerator } from "@/components/report-generator"
 import { SEVERITY_ORDER, severityStyles, type Incident, type Severity } from "@/lib/irm"
-import { FileBarChart, TrendingUp, Clock, ShieldCheck } from "lucide-react"
+import { FileBarChart, TrendingUp, Clock, ShieldCheck, Database } from "lucide-react"
 
 export const dynamic = "force-dynamic"
 
 export default async function ReportsPage() {
-  const supabase = await createClient()
-  const { data, error } = await supabase
-    .from("incidents")
-    .select("*")
-    .order("created_at", { ascending: false })
+  const [incidentsResult, reportsResult] = await Promise.all([
+    fetchIncidents(),
+    fetchReports(),
+  ])
 
-  const incidents = (data ?? []) as Incident[]
+  const incidents = incidentsResult.data
+  const reports = reportsResult.data
+
   const total = incidents.length
   const resolved = incidents.filter((i) => i.status === "Resolved").length
   const resolutionRate = total > 0 ? Math.round((resolved / total) * 100) : 0
@@ -41,24 +43,37 @@ export default async function ReportsPage() {
 
   const summary = [
     { label: "Total Processed", value: String(total), icon: FileBarChart, tone: "text-sky-400" },
-    { label: "Avg Risk Score", value: String(avgRisk), icon: TrendingUp, tone: "text-orange-400" },
+    { label: "Avg AU Risk Score", value: String(avgRisk), icon: TrendingUp, tone: "text-orange-400" },
     { label: "Resolution Rate", value: `${resolutionRate}%`, icon: ShieldCheck, tone: "text-emerald-400" },
-    { label: "Open Cases", value: String(total - resolved), icon: Clock, tone: "text-amber-400" },
+    { label: "Open IRM Cases", value: String(total - resolved), icon: Clock, tone: "text-amber-400" },
   ]
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6 px-4 py-6 pt-20 lg:px-8 lg:pt-8">
+    <div className="mx-auto max-w-7xl space-y-8 px-4 py-6 pt-20 lg:px-8 lg:pt-8">
       <PageHeader
         title="Reports & Analytics"
-        description="Aggregated incident metrics rendered by the Graphical Unit."
+        description="Aggregated incident telemetry rendered by the Graphical Unit (GU) and downloadable forensic HTML reports."
       />
 
-      {error && (
-        <Card className="border-red-500/30 bg-red-500/5">
-          <CardContent className="p-4 text-sm text-red-400">Failed to load report data: {error.message}</CardContent>
-        </Card>
-      )}
+      {/* Database connection notice */}
+      <div className="flex items-center justify-between rounded-lg border border-border bg-card/60 px-4 py-2 text-xs">
+        <div className="flex items-center gap-2">
+          <Database className="h-4 w-4 text-primary" />
+          <span className="font-medium text-foreground">Storage Backend:</span>
+          {reportsResult.isSupabase ? (
+            <span className="text-emerald-400 font-medium">Supabase Cloud Database (Live Sync)</span>
+          ) : (
+            <span className="text-muted-foreground">
+              Local Prototype Store (Synchronized in-memory)
+            </span>
+          )}
+        </div>
+        <span className="text-[11px] text-muted-foreground">
+          {reports.length} reports generated
+        </span>
+      </div>
 
+      {/* Stat Cards */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {summary.map((s) => {
           const Icon = s.icon
@@ -78,11 +93,15 @@ export default async function ReportsPage() {
         })}
       </div>
 
+      {/* Standalone HTML Report Generator (Module 5) */}
+      <ReportGenerator incidents={incidents} initialReports={reports} />
+
+      {/* Analytics Charts */}
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>Incidents by Severity</CardTitle>
-            <CardDescription>Distribution across all processed incidents.</CardDescription>
+            <CardDescription>Volume distribution classified by the IRM</CardDescription>
           </CardHeader>
           <CardContent>
             <SeverityBarChart data={severityData} />
@@ -91,8 +110,8 @@ export default async function ReportsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Average Risk Trend</CardTitle>
-            <CardDescription>Mean risk score per day over the last week.</CardDescription>
+            <CardTitle>Average Risk Score Trend</CardTitle>
+            <CardDescription>Arithmetic Unit mean score per day over the last week</CardDescription>
           </CardHeader>
           <CardContent>
             <TrendLineChart data={trend} />
@@ -103,7 +122,7 @@ export default async function ReportsPage() {
       <Card>
         <CardHeader>
           <CardTitle>Severity Breakdown</CardTitle>
-          <CardDescription>Counts and share of total volume.</CardDescription>
+          <CardDescription>Counts and share of total volume</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-3">

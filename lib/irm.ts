@@ -10,6 +10,8 @@ export interface Incident {
   incident_name: string
   severity: Severity
   risk_score: number
+  likelihood?: number
+  impact?: number
   status: IncidentStatus
   description: string | null
   created_at: string
@@ -34,8 +36,55 @@ export interface ResponseRule {
   is_active: boolean
 }
 
-// The AU calculates Risk = Likelihood x Impact (0-100).
-// The IRM classifies that risk score into a severity using the response rules below.
+export interface MalwareTest {
+  id: string
+  file_name: string
+  file_size: number
+  sha256_hash: string
+  detection_status: "Clean" | "Suspicious" | "Simulated Malicious" | "EICAR Standard Test"
+  risk_level: Severity | "Clean"
+  scanner_type: string
+  scan_notes?: string
+  created_at: string
+}
+
+export interface YaraRule {
+  id: string
+  rule_id: string
+  rule_name: string
+  description: string
+  severity: Severity
+  rule_content: string
+  is_active: boolean
+  created_at?: string
+}
+
+export interface IncidentReport {
+  id: string
+  incident_id: string
+  report_title: string
+  risk_score: number
+  severity: Severity
+  analysis_result: string
+  response_notes: string
+  generated_by?: string
+  created_at: string
+}
+
+// Arithmetic Unit (AU): Risk = Likelihood × Impact (0 - 100)
+// Likelihood: 0.00 to 1.00
+// Impact: 0 to 100
+export function calculateRisk(likelihood: number, impact: number): { riskScore: number; severity: Severity } {
+  const clampedLikelihood = Math.max(0, Math.min(1, Number(likelihood) || 0))
+  const clampedImpact = Math.max(0, Math.min(100, Number(impact) || 0))
+  const riskScore = Math.round(clampedLikelihood * clampedImpact)
+  return {
+    riskScore,
+    severity: classifyRisk(riskScore),
+  }
+}
+
+// The IRM classifies the calculated risk score into an operational severity category
 export function classifyRisk(risk: number): Severity {
   if (risk >= 80) return "Critical"
   if (risk >= 50) return "High"
@@ -45,7 +94,13 @@ export function classifyRisk(risk: number): Severity {
 
 export const SEVERITY_ORDER: Severity[] = ["Critical", "High", "Medium", "Low"]
 
-export function severityStyles(severity: Severity): { badge: string; dot: string; text: string; hex: string } {
+export function severityStyles(severity: Severity): {
+  badge: string
+  dot: string
+  text: string
+  hex: string
+  soft: string
+} {
   switch (severity) {
     case "Critical":
       return {
@@ -53,6 +108,7 @@ export function severityStyles(severity: Severity): { badge: string; dot: string
         dot: "bg-red-500",
         text: "text-red-400",
         hex: "#ef4444",
+        soft: "bg-red-500/10 text-red-400 border border-red-500/20",
       }
     case "High":
       return {
@@ -60,6 +116,7 @@ export function severityStyles(severity: Severity): { badge: string; dot: string
         dot: "bg-orange-500",
         text: "text-orange-400",
         hex: "#f97316",
+        soft: "bg-orange-500/10 text-orange-400 border border-orange-500/20",
       }
     case "Medium":
       return {
@@ -67,6 +124,7 @@ export function severityStyles(severity: Severity): { badge: string; dot: string
         dot: "bg-amber-500",
         text: "text-amber-400",
         hex: "#f59e0b",
+        soft: "bg-amber-500/10 text-amber-400 border border-amber-500/20",
       }
     case "Low":
       return {
@@ -74,6 +132,7 @@ export function severityStyles(severity: Severity): { badge: string; dot: string
         dot: "bg-emerald-500",
         text: "text-emerald-400",
         hex: "#10b981",
+        soft: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
       }
   }
 }
@@ -92,26 +151,54 @@ export function statusStyles(status: string): string {
       return "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
     case "Monitoring":
       return "border-amber-500/30 bg-amber-500/10 text-amber-400"
+    case "Clean":
+      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+    case "Suspicious":
+      return "border-amber-500/30 bg-amber-500/10 text-amber-400"
+    case "Simulated Malicious":
+    case "EICAR Standard Test":
+      return "border-red-500/30 bg-red-500/10 text-red-400"
     default:
       return "border-border bg-muted text-muted-foreground"
   }
 }
 
 export function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  })
+  try {
+    return new Date(iso).toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+  } catch {
+    return iso
+  }
 }
 
 export function timeAgo(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime()
-  const mins = Math.floor(diff / 60000)
-  if (mins < 60) return `${mins}m ago`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
+  try {
+    const diff = Date.now() - new Date(iso).getTime()
+    const mins = Math.floor(diff / 60000)
+    if (mins < 1) return "Just now"
+    if (mins < 60) return `${mins}m ago`
+    const hours = Math.floor(mins / 60)
+    if (hours < 24) return `${hours}h ago`
+    const days = Math.floor(hours / 24)
+    return `${days}d ago`
+  } catch {
+    return "Recently"
+  }
+}
+
+// Safely escape user strings for HTML rendering
+export function escapeHtml(str: string | null | undefined): string {
+  if (!str) return ""
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;")
 }

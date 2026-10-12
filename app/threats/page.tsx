@@ -1,4 +1,6 @@
 import Link from "next/link"
+import { redirect } from "next/navigation"
+import { getCurrentTeamMember } from "@/lib/auth"
 import { fetchThreats } from "@/lib/data-service"
 import { PageHeader } from "@/components/page-header"
 import { Card, CardContent } from "@/components/ui/card"
@@ -9,6 +11,8 @@ import { Radar, Bug, ArrowRight, Database } from "lucide-react"
 export const dynamic = "force-dynamic"
 
 export default async function ThreatsPage() {
+  const user = await getCurrentTeamMember()
+
   const { data: threats, isSupabase, error } = await fetchThreats()
 
   return (

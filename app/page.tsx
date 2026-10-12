@@ -1,4 +1,6 @@
 import Link from "next/link"
+import { redirect } from "next/navigation"
+import { getCurrentTeamMember } from "@/lib/auth"
 import { fetchIncidents } from "@/lib/data-service"
 import { PageHeader } from "@/components/page-header"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -26,6 +28,8 @@ import {
 export const dynamic = "force-dynamic"
 
 export default async function DashboardPage() {
+  const user = await getCurrentTeamMember()
+
   const { data: incidents, isSupabase, error } = await fetchIncidents()
 
   const total = incidents.length
@@ -94,32 +98,49 @@ export default async function DashboardPage() {
         </div>
       </PageHeader>
 
-      {/* Database connection banner */}
-      <div className="flex items-center justify-between rounded-lg border border-border bg-card/60 px-4 py-2 text-xs">
-        <div className="flex items-center gap-2">
-          <Database className="h-4 w-4 text-primary" />
-          <span className="font-medium text-foreground">Data Layer:</span>
-          {isSupabase ? (
-            <span className="inline-flex items-center gap-1 text-emerald-400">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-              Connected to Supabase live database
-            </span>
-          ) : (
-            <span className="text-muted-foreground">
-              Local Prototype Mode (In-memory storage). Connect Supabase in{" "}
-              <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">.env.local</code> for cloud persistence.
-            </span>
-          )}
+      {/* Mode and Database Status Banner */}
+      {!user ? (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
+          <div className="flex items-center gap-2">
+            <span className="flex h-2.5 w-2.5 shrink-0 rounded-full bg-amber-400" />
+            <div>
+              <span className="font-semibold text-amber-300">Interactive Demo Mode:</span>{" "}
+              <span>Viewing simulated incident telemetry. Actions are evaluated locally and isolated from the database.</span>
+            </div>
+          </div>
+          <Link
+            href="/login"
+            className="self-start sm:self-auto rounded bg-amber-500/20 px-3 py-1 font-medium text-amber-300 border border-amber-500/40 hover:bg-amber-500/30 transition-colors whitespace-nowrap"
+          >
+            Team Sign In
+          </Link>
         </div>
-        <span className="text-[11px] text-muted-foreground hidden sm:inline">
-          {incidents.length} incident records loaded
-        </span>
-      </div>
+      ) : (
+        <div className="flex items-center justify-between rounded-lg border border-border bg-card/60 px-4 py-2 text-xs">
+          <div className="flex items-center gap-2">
+            <Database className="h-4 w-4 text-primary" />
+            <span className="font-medium text-foreground">Storage Backend:</span>
+            {isSupabase ? (
+              <span className="inline-flex items-center gap-1.5 text-emerald-400 font-medium">
+                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                Supabase Cloud Database (Live Cloud Sync) · Signed in as {user.name} ({user.role})
+              </span>
+            ) : (
+              <span className="text-muted-foreground">
+                Local Prototype Store (Synchronized in-memory)
+              </span>
+            )}
+          </div>
+          <span className="text-[11px] text-muted-foreground hidden sm:inline">
+            {incidents.length} incident records loaded
+          </span>
+        </div>
+      )}
 
       {error && (
         <Card className="border-red-500/30 bg-red-500/5">
           <CardContent className="p-4 text-sm text-red-400">
-            Database notice: {error} (Falling back to local prototype storage)
+            Database notice: {error}
           </CardContent>
         </Card>
       )}

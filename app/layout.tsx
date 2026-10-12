@@ -2,7 +2,8 @@ import type React from "react"
 import type { Metadata } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import { Analytics } from "@vercel/analytics/next"
-import { Sidebar } from "@/components/sidebar"
+import { AppShell } from "@/components/app-shell"
+import { getCurrentTeamMember } from "@/lib/auth"
 import { Suspense } from "react"
 import "./globals.css"
 
@@ -23,20 +24,19 @@ export const metadata: Metadata = {
   generator: "v0.app",
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  const user = await getCurrentTeamMember()
+
   return (
     <html lang="en" className={`dark ${geistSans.variable} ${geistMono.variable}`}>
       <body className="font-sans antialiased">
-        <div className="flex min-h-screen bg-background">
-          <Sidebar />
-          <main className="flex-1 min-w-0 lg:pl-64">
-            <Suspense fallback={null}>{children}</Suspense>
-          </main>
-        </div>
+        <AppShell user={user}>
+          <Suspense fallback={null}>{children}</Suspense>
+        </AppShell>
         <Analytics />
       </body>
     </html>

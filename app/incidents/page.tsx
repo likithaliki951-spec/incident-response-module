@@ -1,3 +1,5 @@
+import { redirect } from "next/navigation"
+import { getCurrentTeamMember } from "@/lib/auth"
 import { fetchIncidents } from "@/lib/data-service"
 import { PageHeader } from "@/components/page-header"
 import { Card, CardContent } from "@/components/ui/card"
@@ -9,6 +11,8 @@ import { Database } from "lucide-react"
 export const dynamic = "force-dynamic"
 
 export default async function IncidentsPage() {
+  const user = await getCurrentTeamMember()
+
   const { data: incidents, isSupabase, error } = await fetchIncidents()
 
   return (

@@ -1,7 +1,13 @@
 -- ==============================================================================
--- Incident Response Module (IRM) Database Schema
+-- Incident Response Module (IRM) — Consolidated Production Database Schema
 -- Architecture: Arithmetic Unit (AU) -> Incident Response Module (IRM) -> Graphical Unit (GU)
+-- Access Model: Strictly restricted to active, authenticated team members (Fail-Closed)
+-- Execution: Run in Supabase SQL Editor (as postgres/service_role) to initialize a fresh database.
 -- ==============================================================================
+
+-- ------------------------------------------------------------------------------
+-- 1. APPLICATION TABLES
+-- ------------------------------------------------------------------------------
 
 -- 1. Incidents Table
 CREATE TABLE IF NOT EXISTS public.incidents (
@@ -77,138 +83,361 @@ CREATE TABLE IF NOT EXISTS public.response_rules (
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
--- ==============================================================================
--- Row Level Security (RLS) Configuration
--- ==============================================================================
+-- 7. Team Members Roster Table
+CREATE TABLE IF NOT EXISTS public.team_members (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'SecOps Analyst',
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
 
+-- Case-insensitive unique index on email
+CREATE UNIQUE INDEX IF NOT EXISTS team_members_lower_email_idx ON public.team_members (lower(email));
+
+
+-- ------------------------------------------------------------------------------
+-- 2. ROW LEVEL SECURITY (RLS) ACTIVATION
+-- ------------------------------------------------------------------------------
+-- Explicitly activate Row Level Security on all 7 tables:
 ALTER TABLE public.incidents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.malware_tests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.yara_rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.reports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.threats ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.response_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.team_members ENABLE ROW LEVEL SECURITY;
 
--- Allow public / anonymous read access
-DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow anon select on incidents') THEN
-        CREATE POLICY "Allow anon select on incidents" ON public.incidents FOR SELECT USING (true);
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow anon insert on incidents') THEN
-        CREATE POLICY "Allow anon insert on incidents" ON public.incidents FOR INSERT WITH CHECK (true);
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow anon update on incidents') THEN
-        CREATE POLICY "Allow anon update on incidents" ON public.incidents FOR UPDATE USING (true);
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow anon delete on incidents') THEN
-        CREATE POLICY "Allow anon delete on incidents" ON public.incidents FOR DELETE USING (true);
-    END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow anon all on malware_tests') THEN
-        CREATE POLICY "Allow anon all on malware_tests" ON public.malware_tests FOR ALL USING (true) WITH CHECK (true);
+-- ------------------------------------------------------------------------------
+-- 3. HARDENED SECURITY DEFINER AUTHORIZATION FUNCTIONS
+-- ------------------------------------------------------------------------------
+
+-- Helper 1: Verify active team membership (Fail-Closed: NEVER authorizes if roster is empty)
+CREATE OR REPLACE FUNCTION public.is_authorized_team_member()
+RETURNS BOOLEAN AS $$
+BEGIN
+    -- Fail-closed: Must have valid authenticated user ID
+    IF auth.uid() IS NULL THEN
+        RETURN false;
     END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow anon all on yara_rules') THEN
-        CREATE POLICY "Allow anon all on yara_rules" ON public.yara_rules FOR ALL USING (true) WITH CHECK (true);
+    -- Strictly requires an existing, active roster record
+    RETURN EXISTS (
+        SELECT 1 FROM public.team_members
+        WHERE (
+            user_id = auth.uid() 
+            OR lower(email) = lower(coalesce(auth.jwt()->>'email', ''))
+        )
+        AND is_active = true
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, auth, pg_temp;
+
+REVOKE ALL ON FUNCTION public.is_authorized_team_member() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.is_authorized_team_member() TO authenticated;
+
+
+-- Helper 2: Verify team administrative privileges (to manage roster)
+CREATE OR REPLACE FUNCTION public.is_team_admin()
+RETURNS BOOLEAN AS $$
+BEGIN
+    IF auth.uid() IS NULL THEN
+        RETURN false;
     END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow anon all on reports') THEN
-        CREATE POLICY "Allow anon all on reports" ON public.reports FOR ALL USING (true) WITH CHECK (true);
-    END IF;
+    RETURN EXISTS (
+        SELECT 1 FROM public.team_members
+        WHERE (
+            user_id = auth.uid() 
+            OR lower(email) = lower(coalesce(auth.jwt()->>'email', ''))
+        )
+        AND is_active = true
+        AND lower(role) IN ('admin', 'secops admin', 'incident lead responder', 'lead')
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, auth, pg_temp;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow anon all on threats') THEN
-        CREATE POLICY "Allow anon all on threats" ON public.threats FOR ALL USING (true) WITH CHECK (true);
-    END IF;
+REVOKE ALL ON FUNCTION public.is_team_admin() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.is_team_admin() TO authenticated;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow anon all on response_rules') THEN
-        CREATE POLICY "Allow anon all on response_rules" ON public.response_rules FOR ALL USING (true) WITH CHECK (true);
-    END IF;
-END $$;
 
+-- ------------------------------------------------------------------------------
+-- 4. EXPLICIT TABLE PRIVILEGES (DEFENSE-IN-DEPTH)
+-- ------------------------------------------------------------------------------
+-- Explicitly revoke all table-level access from anon and PUBLIC.
+-- Unauthenticated requests via Supabase API (PostgREST) are immediately rejected.
+REVOKE ALL ON TABLE public.incidents FROM anon, PUBLIC;
+REVOKE ALL ON TABLE public.malware_tests FROM anon, PUBLIC;
+REVOKE ALL ON TABLE public.yara_rules FROM anon, PUBLIC;
+REVOKE ALL ON TABLE public.reports FROM anon, PUBLIC;
+REVOKE ALL ON TABLE public.threats FROM anon, PUBLIC;
+REVOKE ALL ON TABLE public.response_rules FROM anon, PUBLIC;
+REVOKE ALL ON TABLE public.team_members FROM anon, PUBLIC;
+
+-- Explicitly grant table permissions to authenticated role (strictly filtered by RLS)
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.incidents TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.malware_tests TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.yara_rules TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.reports TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.threats TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.response_rules TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.team_members TO authenticated;
+
+
+-- ------------------------------------------------------------------------------
+-- 5. ROW LEVEL SECURITY POLICIES (TEAM-ONLY ACCESS)
+-- ------------------------------------------------------------------------------
+
+-- Incidents
+DROP POLICY IF EXISTS "Allow authenticated team members select on incidents" ON public.incidents;
+CREATE POLICY "Allow authenticated team members select on incidents"
+    ON public.incidents FOR SELECT TO authenticated
+    USING (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members insert on incidents" ON public.incidents;
+CREATE POLICY "Allow authenticated team members insert on incidents"
+    ON public.incidents FOR INSERT TO authenticated
+    WITH CHECK (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members update on incidents" ON public.incidents;
+CREATE POLICY "Allow authenticated team members update on incidents"
+    ON public.incidents FOR UPDATE TO authenticated
+    USING (public.is_authorized_team_member())
+    WITH CHECK (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members delete on incidents" ON public.incidents;
+CREATE POLICY "Allow authenticated team members delete on incidents"
+    ON public.incidents FOR DELETE TO authenticated
+    USING (public.is_authorized_team_member());
+
+-- Malware Tests
+DROP POLICY IF EXISTS "Allow authenticated team members select on malware_tests" ON public.malware_tests;
+CREATE POLICY "Allow authenticated team members select on malware_tests"
+    ON public.malware_tests FOR SELECT TO authenticated
+    USING (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members insert on malware_tests" ON public.malware_tests;
+CREATE POLICY "Allow authenticated team members insert on malware_tests"
+    ON public.malware_tests FOR INSERT TO authenticated
+    WITH CHECK (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members update on malware_tests" ON public.malware_tests;
+CREATE POLICY "Allow authenticated team members update on malware_tests"
+    ON public.malware_tests FOR UPDATE TO authenticated
+    USING (public.is_authorized_team_member())
+    WITH CHECK (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members delete on malware_tests" ON public.malware_tests;
+CREATE POLICY "Allow authenticated team members delete on malware_tests"
+    ON public.malware_tests FOR DELETE TO authenticated
+    USING (public.is_authorized_team_member());
+
+-- YARA Rules
+DROP POLICY IF EXISTS "Allow authenticated team members select on yara_rules" ON public.yara_rules;
+CREATE POLICY "Allow authenticated team members select on yara_rules"
+    ON public.yara_rules FOR SELECT TO authenticated
+    USING (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members insert on yara_rules" ON public.yara_rules;
+CREATE POLICY "Allow authenticated team members insert on yara_rules"
+    ON public.yara_rules FOR INSERT TO authenticated
+    WITH CHECK (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members update on yara_rules" ON public.yara_rules;
+CREATE POLICY "Allow authenticated team members update on yara_rules"
+    ON public.yara_rules FOR UPDATE TO authenticated
+    USING (public.is_authorized_team_member())
+    WITH CHECK (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members delete on yara_rules" ON public.yara_rules;
+CREATE POLICY "Allow authenticated team members delete on yara_rules"
+    ON public.yara_rules FOR DELETE TO authenticated
+    USING (public.is_authorized_team_member());
+
+-- Incident Reports
+DROP POLICY IF EXISTS "Allow authenticated team members select on reports" ON public.reports;
+CREATE POLICY "Allow authenticated team members select on reports"
+    ON public.reports FOR SELECT TO authenticated
+    USING (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members insert on reports" ON public.reports;
+CREATE POLICY "Allow authenticated team members insert on reports"
+    ON public.reports FOR INSERT TO authenticated
+    WITH CHECK (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members update on reports" ON public.reports;
+CREATE POLICY "Allow authenticated team members update on reports"
+    ON public.reports FOR UPDATE TO authenticated
+    USING (public.is_authorized_team_member())
+    WITH CHECK (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members delete on reports" ON public.reports;
+CREATE POLICY "Allow authenticated team members delete on reports"
+    ON public.reports FOR DELETE TO authenticated
+    USING (public.is_authorized_team_member());
+
+-- Threat Intelligence
+DROP POLICY IF EXISTS "Allow authenticated team members select on threats" ON public.threats;
+CREATE POLICY "Allow authenticated team members select on threats"
+    ON public.threats FOR SELECT TO authenticated
+    USING (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members insert on threats" ON public.threats;
+CREATE POLICY "Allow authenticated team members insert on threats"
+    ON public.threats FOR INSERT TO authenticated
+    WITH CHECK (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members update on threats" ON public.threats;
+CREATE POLICY "Allow authenticated team members update on threats"
+    ON public.threats FOR UPDATE TO authenticated
+    USING (public.is_authorized_team_member())
+    WITH CHECK (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members delete on threats" ON public.threats;
+CREATE POLICY "Allow authenticated team members delete on threats"
+    ON public.threats FOR DELETE TO authenticated
+    USING (public.is_authorized_team_member());
+
+-- Response Rules
+DROP POLICY IF EXISTS "Allow authenticated team members select on response_rules" ON public.response_rules;
+CREATE POLICY "Allow authenticated team members select on response_rules"
+    ON public.response_rules FOR SELECT TO authenticated
+    USING (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members insert on response_rules" ON public.response_rules;
+CREATE POLICY "Allow authenticated team members insert on response_rules"
+    ON public.response_rules FOR INSERT TO authenticated
+    WITH CHECK (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members update on response_rules" ON public.response_rules;
+CREATE POLICY "Allow authenticated team members update on response_rules"
+    ON public.response_rules FOR UPDATE TO authenticated
+    USING (public.is_authorized_team_member())
+    WITH CHECK (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow authenticated team members delete on response_rules" ON public.response_rules;
+CREATE POLICY "Allow authenticated team members delete on response_rules"
+    ON public.response_rules FOR DELETE TO authenticated
+    USING (public.is_authorized_team_member());
+
+-- Team Members Roster (No Public Enumeration)
+DROP POLICY IF EXISTS "Allow active team members view roster" ON public.team_members;
+CREATE POLICY "Allow active team members view roster"
+    ON public.team_members FOR SELECT TO authenticated
+    USING (public.is_authorized_team_member());
+
+DROP POLICY IF EXISTS "Allow team admins insert roster" ON public.team_members;
+CREATE POLICY "Allow team admins insert roster"
+    ON public.team_members FOR INSERT TO authenticated
+    WITH CHECK (public.is_team_admin());
+
+DROP POLICY IF EXISTS "Allow team admins update roster" ON public.team_members;
+CREATE POLICY "Allow team admins update roster"
+    ON public.team_members FOR UPDATE TO authenticated
+    USING (public.is_team_admin())
+    WITH CHECK (public.is_team_admin());
+
+DROP POLICY IF EXISTS "Allow team admins delete roster" ON public.team_members;
+CREATE POLICY "Allow team admins delete roster"
+    ON public.team_members FOR DELETE TO authenticated
+    USING (public.is_team_admin());
+
+-- Note: Anonymous role (anon) has zero policies. All unauthenticated requests are denied by default.
+--
+-- Demonstration Seed Data:
+-- Baseline evaluation records are stored in supabase/seed.sql.
+-- To populate sample incidents, YARA rules, and telemetry, run supabase/seed.sql after this schema.
+--
 -- ==============================================================================
--- Seed Baseline Data (Safe ON CONFLICT DO NOTHING)
+-- 6. INITIAL ADMINISTRATOR PROVISIONING PROCEDURE (FAIL-CLOSED)
 -- ==============================================================================
-
-INSERT INTO public.incidents (incident_id, incident_name, severity, likelihood, impact, risk_score, status, description)
-VALUES
-    ('INC-2026-1041', 'Anomalous PowerShell Execution with Remote Download', 'Critical', 0.90, 92, 83, 'Open', 'EDR alert: PowerShell executed with bypass arguments invoking external staging URL from Workstation WS-04.'),
-    ('INC-2026-1039', 'Repeated Brute-Force Attempts on Internal VPN Gateway', 'High', 0.85, 75, 64, 'Investigating', 'Over 450 failed authentication attempts detected from IP 198.51.100.42 within 10 minutes targeting engineering LDAP.'),
-    ('INC-2026-1035', 'Unauthorized S3 Bucket Policy Modification', 'High', 0.70, 80, 56, 'Open', 'CloudTrail audit logged an unexpected policy update granting global read access to client telemetry bucket.'),
-    ('INC-2026-1028', 'Simulated Phishing Campaign Test Result', 'Medium', 0.50, 50, 25, 'Resolved', 'Scheduled security awareness drill simulated payload delivery to sales department. 3 clicks recorded.'),
-    ('INC-2026-1020', 'Suspicious Outbound DNS Tunneling Queries', 'Medium', 0.60, 65, 39, 'Investigating', 'DNS logs show high volume of subdomains queried under unknown dynamic DNS provider indicative of C2 beaconing.'),
-    ('INC-2026-1004', 'Expired TLS Certificate on Staging Ingress', 'Low', 0.30, 30, 9, 'Resolved', 'Automated alert for staging environment certificate renewal expiration. Certificate reissued and deployed.')
-ON CONFLICT (incident_id) DO NOTHING;
-
-INSERT INTO public.yara_rules (rule_id, rule_name, description, severity, rule_content, is_active)
-VALUES
-    ('YARA-001', 'SUSPICIOUS_POWERSHELL_DOWNLOAD', 'Demonstration rule identifying encoded PowerShell web client download executions.', 'High', 'rule Suspicious_PowerShell_Download {
-    meta:
-        description = "Detects web client download strings in scripts"
-        demonstration = "true"
-    strings:
-        $s1 = "DownloadString" nocase
-        $s2 = "Net.WebClient" nocase
-        $s3 = "-EncodedCommand" nocase
-    condition:
-        ($s1 and $s2) or $s3
-}', true),
-    ('YARA-002', 'EICAR_AV_TEST_STRING', 'Standard anti-virus validation signature string for harmless testing.', 'Critical', 'rule EICAR_Standard_Test_File {
-    meta:
-        description = "Industry standard anti-virus verification test string"
-        reference = "https://www.eicar.org"
-        demonstration = "true"
-    strings:
-        $eicar = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
-    condition:
-        $eicar
-}', true),
-    ('YARA-003', 'RANSOMWARE_NOTE_INDICATORS', 'Detects common keywords present in extortion and simulated ransom notices.', 'Critical', 'rule Ransomware_Note_Keywords {
-    meta:
-        description = "Identifies extortion and decryption demand patterns"
-        demonstration = "true"
-    strings:
-        $r1 = "all your files have been encrypted" nocase
-        $r2 = "send bitcoin to" nocase
-        $r3 = "decrypt your files" nocase
-    condition:
-        2 of ($r*)
-}', true),
-    ('YARA-004', 'HIGH_ENTROPY_BASE64_EXEC', 'Heuristic pattern for base64 encoded command arguments in process invocations.', 'Medium', 'rule Suspicious_Base64_Execution {
-    meta:
-        description = "Base64 execution patterns in CLI tools"
-        demonstration = "true"
-    strings:
-        $b1 = "powershell -e " nocase
-        $b2 = "cmd.exe /c echo " nocase
-    condition:
-        any of them
-}', true)
-ON CONFLICT (rule_id) DO NOTHING;
-
-INSERT INTO public.malware_tests (file_name, file_size, sha256_hash, detection_status, risk_level, scanner_type, scan_notes)
-VALUES
-    ('eicar_standard_test.com', 68, '275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f', 'EICAR Standard Test', 'Critical', 'Simulated Signature Engine (EICAR)', 'Matches European Institute for Computer Antivirus Research standard verification signature. Harmless test vector.'),
-    ('harmless_recon_script.ps1', 1024, '4a8f117a2b0e68e42718e244b413e110b98a0d0a5e229c9ef6a07cf5814bfb22', 'Suspicious', 'Medium', 'Simulated Heuristic Pattern Engine', 'Simulated pattern match on PowerShell obfuscation flags (e.g., -EncodedCommand, Net.WebClient).'),
-    ('system_health_audit.log', 4096, 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad', 'Clean', 'Clean', 'Simulated Cryptographic Checksum Engine', 'Cryptographic hash verified against known benign checksum baseline. Zero threats identified.')
-ON CONFLICT DO NOTHING;
-
-INSERT INTO public.reports (incident_id, report_title, risk_score, severity, analysis_result, response_notes, generated_by)
-VALUES
-    ('INC-2026-1041', 'Forensic Triage: Anomalous PowerShell Remote Download', 83, 'Critical', 'Confirmed unauthorized PowerShell execution attempting payload retrieval from 198.51.100.42. Matched rule YARA-001.', 'Workstation WS-04 isolated from VLAN 12. External staging domain sinkholed at perimeter firewall. Memory dump acquired.', 'SecOps Lead Responder'),
-    ('INC-2026-1039', 'Incident Summary: Internal VPN Gateway Brute-Force', 64, 'High', 'Automated brute-force attack originating from external subnet against LDAP accounts. 450 attempts recorded.', 'Origin IP blocked on perimeter gateway rate-limiter. Enforced mandatory MFA re-challenge on 14 affected accounts.', 'Security Operations Center')
-ON CONFLICT DO NOTHING;
-
-INSERT INTO public.threats (threat_name, threat_type, risk_level, source, status)
-VALUES
-    ('DarkGate Loader Campaign', 'Malware Loader', 'High', 'CISA Advisory AA24-12', 'Active'),
-    ('CVE-2024-38063 IPv6 RCE', 'Vulnerability Exploit', 'Critical', 'Microsoft Security Bulletin', 'Mitigated'),
-    ('DNS Spoofing on External Resolver', 'Network Tampering', 'Medium', 'BGP Mon / DNS Watchdog', 'Monitoring'),
-    ('Credential Stuffing on SSO Portal', 'Identity Attack', 'High', 'Internal SIEM Correlation', 'Active')
-ON CONFLICT DO NOTHING;
-
-INSERT INTO public.response_rules (rule_id, rule_name, condition, severity, is_active)
-VALUES
-    ('RULE-AU-01', 'Critical Risk Automatic Escalation', 'Risk >= 80', 'Critical', true),
-    ('RULE-AU-02', 'High Risk SecOps Triage', 'Risk >= 50 AND Risk < 80', 'High', true),
-    ('RULE-AU-03', 'Medium Risk Analyst Queue', 'Risk >= 20 AND Risk < 50', 'Medium', true),
-    ('RULE-AU-04', 'Low Risk Automated Logging', 'Risk < 20', 'Low', true)
-ON CONFLICT (rule_id) DO NOTHING;
+-- Because the application fails closed when public.team_members is empty, the initial
+-- administrator must be provisioned via the Supabase Dashboard SQL Editor (running as postgres).
+--
+-- PREREQUISITE:
+-- 1. Create the administrator account in Supabase Dashboard -> Authentication -> Users.
+-- 2. Ensure "Auto Confirm User" is enabled (or confirm the email).
+-- 3. Replace 'admin@yourcompany.com' below with your actual administrator email.
+--
+-- SECURITY GUARDS IN THIS SCRIPT:
+-- - Validates exactly one confirmed Auth account exists.
+-- - Prevents silent account reassignment (stops if user_id is already bound to a different Auth ID).
+-- - Prevents silent reactivation (stops if account exists but is_active = false).
+-- - Prevents silent role elevation (stops if account exists with an ordinary analyst role).
+-- - Idempotent: Safe to rerun if already properly configured.
+--
+-- DO $$
+-- DECLARE
+--     v_admin_email CONSTANT TEXT := lower('admin@yourcompany.com');
+--     v_user_count INTEGER;
+--     v_auth_id UUID;
+--     v_is_confirmed BOOLEAN;
+--     v_existing_id UUID;
+--     v_existing_user_id UUID;
+--     v_existing_role TEXT;
+--     v_existing_is_active BOOLEAN;
+-- BEGIN
+--     -- 1. Check matching accounts in auth.users
+--     SELECT count(*)
+--     INTO v_user_count
+--     FROM auth.users
+--     WHERE lower(email) = v_admin_email;
+--
+--     IF v_user_count = 0 THEN
+--         RAISE EXCEPTION 'Provisioning halted: No account found in auth.users for email "%". Please create the user in Supabase Dashboard -> Authentication -> Users first.', v_admin_email;
+--     ELSIF v_user_count > 1 THEN
+--         RAISE EXCEPTION 'Provisioning halted: Multiple accounts found in auth.users for email "%" (case-insensitive collision). Resolve duplicate auth accounts before proceeding.', v_admin_email;
+--     END IF;
+--
+--     -- 2. Verify confirmed email and retrieve Auth UUID via separate query (avoiding aggregates on uuid)
+--     SELECT id, (email_confirmed_at IS NOT NULL OR confirmed_at IS NOT NULL)
+--     INTO v_auth_id, v_is_confirmed
+--     FROM auth.users
+--     WHERE lower(email) = v_admin_email;
+--
+--     IF NOT coalesce(v_is_confirmed, false) THEN
+--         RAISE EXCEPTION 'Provisioning halted: Account "%" has not confirmed their email (email_confirmed_at is NULL). In Supabase Dashboard -> Authentication -> Users, check "Auto Confirm User" or confirm the email.', v_admin_email;
+--     END IF;
+--
+--     -- 3. Check existing membership in public.team_members
+--     SELECT id, user_id, role, is_active
+--     INTO v_existing_id, v_existing_user_id, v_existing_role, v_existing_is_active
+--     FROM public.team_members
+--     WHERE lower(email) = v_admin_email;
+--
+--     IF v_existing_id IS NOT NULL THEN
+--         -- Guard 3a: Refuse silent reactivation of inactive memberships
+--         IF v_existing_is_active = false THEN
+--             RAISE EXCEPTION 'Provisioning halted: Team member "%" (ID: %) exists but is currently deactivated (is_active = false). The provisioning script will not silently reactivate an inactive account. Perform an intentional reactivation if intended: UPDATE public.team_members SET is_active = true WHERE id = ''%'';', v_admin_email, v_existing_id, v_existing_id;
+--         END IF;
+--
+--         -- Guard 3b: Refuse implicit role elevation of ordinary analysts
+--         IF lower(v_existing_role) NOT IN ('admin', 'secops admin', 'incident lead responder', 'lead') THEN
+--             RAISE EXCEPTION 'Provisioning halted: "%" already exists as an ordinary member with role "%". Implicit elevation to administrator is forbidden. To intentionally promote this member, run explicit promotion: UPDATE public.team_members SET role = ''Incident Lead Responder'', user_id = ''%'' WHERE id = ''%'';', v_admin_email, v_existing_role, v_auth_id, v_existing_id;
+--         END IF;
+--
+--         -- Guard 3c: Refuse silent account reassignment if already linked to a different Auth ID
+--         IF v_existing_user_id IS NOT NULL AND v_existing_user_id <> v_auth_id THEN
+--             RAISE EXCEPTION 'Provisioning halted: Administrator "%" (ID: %) is already bound to Auth user ID % (different from incoming Auth ID %). Silently reassigning an existing administrator account association is forbidden. Resolve account association manually.', v_admin_email, v_existing_id, v_existing_user_id, v_auth_id;
+--         END IF;
+--
+--         -- Guard 3d: Already properly configured and linked
+--         IF v_existing_user_id = v_auth_id THEN
+--             RAISE NOTICE 'Administrator membership already exists for "%" and is actively linked to Auth UUID %. No changes made.', v_admin_email, v_auth_id;
+--         -- Guard 3e: Pre-existing admin with NULL user_id: safe initial association
+--         ELSIF v_existing_user_id IS NULL THEN
+--             UPDATE public.team_members
+--             SET user_id = v_auth_id
+--             WHERE id = v_existing_id;
+--             RAISE NOTICE 'Successfully linked Auth UUID % to existing unlinked administrator "%" (role: "%").', v_auth_id, v_admin_email, v_existing_role;
+--         END IF;
+--     ELSE
+--         -- 4. Insert new administrator record
+--         INSERT INTO public.team_members (user_id, email, role, is_active)
+--         VALUES (v_auth_id, v_admin_email, 'Incident Lead Responder', true);
+--         RAISE NOTICE 'Successfully provisioned initial administrator for "%" (Auth UUID: %).', v_admin_email, v_auth_id;
+--     END IF;
+-- END $$;
+-- ==============================================================================

@@ -41,8 +41,8 @@ export interface MalwareTest {
   file_name: string
   file_size: number
   sha256_hash: string
-  detection_status: "Clean" | "Suspicious" | "Simulated Malicious" | "EICAR Standard Test"
-  risk_level: Severity | "Clean"
+  detection_status: "Clean" | "Suspicious" | "Simulated Malicious" | "EICAR Standard Test" | "Unknown"
+  risk_level: Severity | "Clean" | "Unknown"
   scanner_type: string
   scan_notes?: string
   created_at: string
@@ -61,6 +61,7 @@ export interface YaraRule {
 
 export interface IncidentReport {
   id: string
+  report_id?: string
   incident_id: string
   report_title: string
   risk_score: number
@@ -94,7 +95,7 @@ export function classifyRisk(risk: number): Severity {
 
 export const SEVERITY_ORDER: Severity[] = ["Critical", "High", "Medium", "Low"]
 
-export function severityStyles(severity: Severity): {
+export function severityStyles(severity: Severity | "Unknown" | "Clean"): {
   badge: string
   dot: string
   text: string
@@ -127,12 +128,22 @@ export function severityStyles(severity: Severity): {
         soft: "bg-amber-500/10 text-amber-400 border border-amber-500/20",
       }
     case "Low":
+    case "Clean":
       return {
         badge: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
         dot: "bg-emerald-500",
         text: "text-emerald-400",
         hex: "#10b981",
         soft: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
+      }
+    case "Unknown":
+    default:
+      return {
+        badge: "border-zinc-500/30 bg-zinc-500/10 text-zinc-400",
+        dot: "bg-zinc-500",
+        text: "text-zinc-400",
+        hex: "#71717a",
+        soft: "bg-zinc-500/10 text-zinc-400 border border-zinc-500/20",
       }
   }
 }

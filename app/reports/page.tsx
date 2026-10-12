@@ -1,3 +1,5 @@
+import { redirect } from "next/navigation"
+import { getCurrentTeamMember } from "@/lib/auth"
 import { fetchIncidents, fetchReports } from "@/lib/data-service"
 import { PageHeader } from "@/components/page-header"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -9,6 +11,8 @@ import { FileBarChart, TrendingUp, Clock, ShieldCheck, Database } from "lucide-r
 export const dynamic = "force-dynamic"
 
 export default async function ReportsPage() {
+  const user = await getCurrentTeamMember()
+
   const [incidentsResult, reportsResult] = await Promise.all([
     fetchIncidents(),
     fetchReports(),

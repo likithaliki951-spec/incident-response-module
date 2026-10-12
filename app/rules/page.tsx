@@ -1,3 +1,5 @@
+import { redirect } from "next/navigation"
+import { getCurrentTeamMember } from "@/lib/auth"
 import { fetchYaraRules, fetchResponseRules } from "@/lib/data-service"
 import { PageHeader } from "@/components/page-header"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -11,6 +13,8 @@ import { GitBranch, CheckCircle2, CircleSlash, Database, Cpu, FileCode2 } from "
 export const dynamic = "force-dynamic"
 
 export default async function RulesPage() {
+  const user = await getCurrentTeamMember()
+
   const [yaraResult, responseRulesResult] = await Promise.all([
     fetchYaraRules(),
     fetchResponseRules(),

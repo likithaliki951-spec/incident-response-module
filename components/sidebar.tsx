@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { useState } from "react"
+import { useState, useTransition } from "react"
 import {
   LayoutDashboard,
   ShieldAlert,
@@ -14,8 +14,12 @@ import {
   X,
   ShieldCheck,
   CheckCircle2,
+  LogOut,
+  User,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { logoutAction } from "@/app/auth-actions"
+import type { TeamMemberProfile } from "@/lib/auth"
 
 const nav = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -26,9 +30,16 @@ const nav = [
   { href: "/reports", label: "Reports & Analytics", icon: FileBarChart },
 ]
 
-export function Sidebar() {
+export function Sidebar({ user }: { user?: TeamMemberProfile | null }) {
   const pathname = usePathname()
   const [open, setOpen] = useState(false)
+  const [isLoggingOut, startTransition] = useTransition()
+
+  function handleLogout() {
+    startTransition(async () => {
+      await logoutAction()
+    })
+  }
 
   return (
     <>
@@ -90,42 +101,97 @@ export function Sidebar() {
           })}
         </nav>
 
-        <div className="border-t border-sidebar-border p-4 space-y-3">
+        <div className="border-t border-sidebar-border p-3 space-y-3">
+          {/* User Profile & Mode Section */}
+          <div className="rounded-lg border border-sidebar-border bg-sidebar-accent/40 p-2.5 space-y-2">
+            {user ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/20 text-primary border border-primary/30 text-xs font-semibold">
+                      <User className="h-3.5 w-3.5" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-xs font-semibold text-sidebar-foreground">
+                        {user.name || "SecOps Analyst"}
+                      </p>
+                      <p className="truncate text-[10px] text-muted-foreground font-mono">
+                        {user.email}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleLogout}
+                  disabled={isLoggingOut}
+                  className="w-full flex items-center justify-center gap-1.5 rounded-md border border-border/80 bg-background/60 py-1 px-2 text-[11px] font-medium text-muted-foreground hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/30 transition-all disabled:opacity-50"
+                  title="Sign out of IRM Console"
+                >
+                  <LogOut className="h-3 w-3" />
+                  <span>{isLoggingOut ? "Signing Out…" : "Log Out"}</span>
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-semibold">
+                      <User className="h-3.5 w-3.5" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-xs font-semibold text-sidebar-foreground">
+                        Demo Visitor
+                      </p>
+                      <p className="truncate text-[10px] text-amber-400 font-mono">
+                        Local Prototype Mode
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <Link
+                  href="/login"
+                  className="w-full flex items-center justify-center gap-1.5 rounded-md border border-primary/40 bg-primary/10 py-1.5 px-2 text-[11px] font-medium text-primary hover:bg-primary/20 transition-all"
+                  title="Sign in as Team Member"
+                >
+                  <span>Team Sign In</span>
+                </Link>
+              </>
+            )}
+          </div>
+
           {/* Architecture Pipeline indicator */}
-          <div className="rounded-lg bg-sidebar-accent/50 p-3 ring-1 ring-sidebar-border">
-            <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-              Architecture Pipeline
-            </p>
+          <div className="rounded-lg bg-sidebar-accent/50 p-2.5 ring-1 ring-sidebar-border">
+            <div className="flex items-center justify-between font-mono text-[10px] mb-1">
+              <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                Pipeline
+              </span>
+              <span className="text-emerald-400 font-sans">Active</span>
+            </div>
             <div className="flex items-center justify-between font-mono text-[11px]">
-              <span className="text-chart-2 font-medium" title="Arithmetic Unit: Calculates Risk = Likelihood × Impact">
+              <span className="text-chart-2 font-medium" title="Arithmetic Unit">
                 AU
               </span>
               <span className="text-muted-foreground">→</span>
-              <span className="text-primary font-medium" title="Incident Response Module: Classifies & synchronizes">
+              <span className="text-primary font-medium" title="Incident Response Module">
                 IRM
               </span>
               <span className="text-muted-foreground">→</span>
-              <span className="text-chart-3 font-medium" title="Graphical Unit: Security presentation layer">
+              <span className="text-chart-3 font-medium" title="Graphical Unit">
                 GU
               </span>
-            </div>
-            <div className="mt-2.5 flex items-center gap-1.5">
-              <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-75" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-              </span>
-              <span className="text-[10px] text-muted-foreground">AU · IRM · GU Active</span>
             </div>
           </div>
 
           {/* Database mode badge */}
           <div className="flex items-center justify-between px-1 text-[11px] text-muted-foreground">
             <span className="flex items-center gap-1">
-              <CheckCircle2 className="h-3 w-3 text-emerald-400" />
-              <span>Storage</span>
+              <span className={cn("h-2 w-2 rounded-full", user ? "bg-emerald-400" : "bg-amber-400")} />
+              <span>{user ? "Authenticated" : "Demo Mode"}</span>
             </span>
             <span className="font-mono text-[10px] rounded bg-muted/60 px-1.5 py-0.5">
-              Supabase Ready
+              {user ? (user.isCloudSupabase ? "Supabase Cloud" : "Team Session") : "In-Memory Store"}
             </span>
           </div>
         </div>
